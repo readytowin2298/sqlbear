@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sqlbear"
+dynamic = ["version"]  # Version is determined dynamically
+description = "Wrapper for sqlalchemy engine that provides functions for handoff with pandas"
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [{ name = "David Ames", email = "readytowin2298@gmail.com" }]
+requires-python = ">=3.7"
+dependencies = ["pandas>=1.2", "sqlalchemy>=1.4", "bson>=0.5", "pytz>=2025"]
+
+[tool.setuptools.dynamic]
+version = { attr = "sqlbear._version.__version__" }
+
+
+[project.urls]
+Homepage = "https://github.com/readytowin2298/sqlbear"
+Repository = "https://github.com/readytowin2298/sqlbear"
+Issues = "https://github.com/readytowin2298/sqlbear/issues"
+
+[tool.setuptools]
+packages = ["sqlbear"]
