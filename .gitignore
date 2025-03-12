@@ -1,5 +1,25 @@
-/venv
-/__pycache__
-
+# Protected Data
 *SECRET.json
 *test.py
+# Bytecode and cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+# Virtual environments
+venv/
+env/
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+# Wheel files
+*.whl
+# Testing / coverage
+.coverage
+htmlcov/
+pytest_cache/
+# IDE / Editor files
+.vscode/
+.idea/
+*.swp
