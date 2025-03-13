@@ -99,7 +99,6 @@ def check_table_schema(engine, table_name, required_schema):
     # Analyze column types
     columns_to_update = {}
     for col, required_type in required_schema.items():
-        print(col, str(required_type))
         required_type = str(required_type).upper()  # Normalize input
         if col not in existing_columns:
             columns_to_update[col] = required_type  # Column is missing, needs creation
@@ -329,5 +328,4 @@ def put_table(con, table, col, data, index_cols=[]):
             con=con,
             dtype=columns_to_update
         )
-        print("I'm here")
         add_indexes(con, table, [col, *index_cols], data)

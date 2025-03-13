@@ -35,14 +35,12 @@ class SQLBear:
         else:
             package = driver_to_package.get(driver)
         if package is None:
-            # print(f"No external package needed for {driver}.")
             return
         # Check if the package is installed
         if importlib.util.find_spec(package) is None:
             print(f"Installing missing package: {package}")
             subprocess.check_call([sys.executable, "-m", "pip", "install", package])
         else:
-            # print(f"Package '{package}' is already installed.")
             return
     
     def put_table(self, table, col, data, index_cols=[]):
