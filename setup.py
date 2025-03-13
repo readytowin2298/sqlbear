@@ -11,7 +11,7 @@ setup(
    name="sqlbear",
    version="0.1.0",
    packages=find_packages(),
-   install_requires=["pandas", "sqlalchemy", "bson", "pytz"],
+   install_requires=["pandas", "sqlalchemy", "pytz"],
    author="Your Name",
    author_email="your.email@example.com",
    description="A pandas extension for easy SQL interaction",
