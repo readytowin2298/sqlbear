@@ -3,7 +3,7 @@ from sqlalchemy.exc import ProgrammingError
 from collections.abc import Iterable
 from dateutil import tz
 import pandas as pd
-import bson
+from bson_connector import ObjectId
 import pytz
 import re
 
@@ -301,7 +301,7 @@ def put_table(con, table, col, data, index_cols=[]):
             data[this_col] = data[this_col].dt.tz_convert(tz_support['server_timezone'])
             data[this_col] = data[this_col].dt.tz_localize(None)
     if columns_to_update != False and len(columns_to_update.keys()) == 0:
-        delete_from_table(con, table, col, data[col].apply(lambda x: str(x) if isinstance(x, bson.objectid.ObjectId) else x))
+        delete_from_table(con, table, col, data[col].apply(lambda x: str(x) if isinstance(x, ObjectId) else x))
         data.to_sql(
             name=table,
             index=False,
