@@ -1,15 +1,24 @@
 from setuptools import setup, find_packages
+import os
+import re
 
+def get_version():
+    version_file = os.path.join(os.path.dirname(__file__), "sqlbear", "_version.py")
+    with open(version_file, "r") as f:
+        content = f.read()
+    
+    # Use regex to extract the version correctly
+    match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', content)
+    if match:
+        return match.group(1)
 
-try:
-    from sqlbear._version import __version__
-except ImportError:
-    __version__ = "unknown"
+    raise RuntimeError("Version not found in sqlbear/_version.py")
+
 
 
 setup(
    name="sqlbear",
-   version=__version__,
+   version=get_version(),
    packages=find_packages(),
    install_requires=["pandas", "sqlalchemy", "pytz"],
    author="Your Name",
