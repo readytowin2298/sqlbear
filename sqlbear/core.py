@@ -42,5 +42,5 @@ class SQLBear:
             # print(f"Package '{package}' is already installed.")
             return
     
-    def put_table(self, table, col, index_cols=[]):
-        put_table(self.engine, table, col, index_cols)
+    def put_table(self, table, col, data, index_cols=[]):
+        put_table(self.engine, table, col, data, index_cols)
