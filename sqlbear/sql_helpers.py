@@ -3,7 +3,7 @@ from sqlalchemy.exc import ProgrammingError
 from collections.abc import Iterable
 from dateutil import tz
 import pandas as pd
-from bson_connector import ObjectId
+from .bson_connector import ObjectId
 import pytz
 import re
 
