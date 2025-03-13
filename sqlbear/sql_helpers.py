@@ -54,13 +54,13 @@ def infer_sql_text_types(df, con):
             max_length = df[col].dropna().astype(str).str.len().max()
             # Suggest field type based on max string length
             if max_length is None or max_length == 0:
-                suggested_types[col] = TEXT  # Default to TEXT if unknown
+                suggested_types[col] = TEXT()  # Default to TEXT if unknown
             elif max_length <= 255:
                 suggested_types[col] = VARCHAR(max_length)
             elif max_length <= 4000 and dialect == "mssql":
                 suggested_types[col] = NVARCHAR(max_length)
             else:
-                suggested_types[col] = TEXT
+                suggested_types[col] = TEXT()
             # Scan for illegal characters if any are defined
             if illegal_chars:
                 offending_rows = df[col].dropna().apply(lambda x: any(c in illegal_chars for c in str(x)))
