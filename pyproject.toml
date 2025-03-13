@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sqlbear"
-dynamic = ["version"]  # Version is determined dynamically
+dynamic = ["version", "classifiers"]  # Version is determined dynamically
 description = "Wrapper for sqlalchemy engine that provides functions for handoff with pandas"
 readme = "README.md"
 license = {file = "LICENSE"}
