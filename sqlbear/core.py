@@ -16,7 +16,7 @@ class SQLBear:
         self.ensure_connector_installed(connection_string)
         self.engine = create_engine(connection_string)
     
-    def ensure_connector_installed(conn_str: str):
+    def ensure_connector_installed(self, conn_str: str):
         """Ensures that the required database driver for the connection string is installed."""
         # Parse connection string to get the driver
         url = make_url(conn_str)
