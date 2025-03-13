@@ -30,7 +30,10 @@ class SQLBear:
             "sqlite": None,  # SQLite is built-in, no need to install
             "mssql": "pyodbc",
         }
-        package = driver_to_package.get(driver)
+        if conn_str[:13] == 'mysql+pymysql':
+            package = 'pymysql'
+        else:
+            package = driver_to_package.get(driver)
         if package is None:
             # print(f"No external package needed for {driver}.")
             return
@@ -42,5 +45,6 @@ class SQLBear:
             # print(f"Package '{package}' is already installed.")
             return
     
-    def put_table(self, table, col, index_cols=[]):
-        put_table(self.engine, table, col, index_cols)
+    def put_table(self, table, col, data, index_cols=[]):
+        put_table(self.engine, table, col, data, index_cols)
+    

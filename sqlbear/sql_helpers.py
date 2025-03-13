@@ -3,7 +3,7 @@ from sqlalchemy.exc import ProgrammingError
 from collections.abc import Iterable
 from dateutil import tz
 import pandas as pd
-from bson_connector import ObjectId
+from .bson_connector import ObjectId
 import pytz
 import re
 
@@ -56,9 +56,9 @@ def infer_sql_text_types(df, con):
             if max_length is None or max_length == 0:
                 suggested_types[col] = TEXT  # Default to TEXT if unknown
             elif max_length <= 255:
-                suggested_types[col] = VARCHAR({max_length})
+                suggested_types[col] = VARCHAR(max_length)
             elif max_length <= 4000 and dialect == "mssql":
-                suggested_types[col] = NVARCHAR({max_length})
+                suggested_types[col] = NVARCHAR(max_length)
             else:
                 suggested_types[col] = TEXT
             # Scan for illegal characters if any are defined
@@ -99,7 +99,8 @@ def check_table_schema(engine, table_name, required_schema):
     # Analyze column types
     columns_to_update = {}
     for col, required_type in required_schema.items():
-        required_type = required_type.upper()  # Normalize input
+        print(col, str(required_type))
+        required_type = str(required_type).upper()  # Normalize input
         if col not in existing_columns:
             columns_to_update[col] = required_type  # Column is missing, needs creation
         else:

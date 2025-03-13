@@ -9,7 +9,7 @@ except ImportError:
 
 setup(
    name="sqlbear",
-   version="0.1.0",
+   version=__version__,
    packages=find_packages(),
    install_requires=["pandas", "sqlalchemy", "pytz"],
    author="Your Name",
