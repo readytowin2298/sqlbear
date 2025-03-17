@@ -60,7 +60,7 @@ def infer_sql_text_types(df, con):
             elif max_length <= 4000 and dialect == "mssql":
                 suggested_types[col] = NVARCHAR(max_length)
             else:
-                suggested_types[col] = TEXT()
+                suggested_types[col] = TEXT(max_length)
             # Scan for illegal characters if any are defined
             if illegal_chars:
                 offending_rows = df[col].dropna().apply(lambda x: any(c in illegal_chars for c in str(x)))
@@ -179,11 +179,8 @@ def add_indexes(con, table, cols, data):
     """
     with con.connect() as conn:
         # Query existing indexes on the table
-        existing_indexes = set()
-        result = conn.execute(text(f"SHOW INDEX FROM `{table}`"))
-        for row in result:
-            existing_indexes.add(tuple(row[4].split(',')))
-            # 
+        df = pd.read_sql_query(f"SHOW INDEX FROM {table}", con)
+        existing_indexes = set([tuple(group["Column_name"]) for _, group in df.groupby("Key_name")])
         # Convert column definitions to tuples for easy comparison
         cols_to_index = [tuple([col]) if isinstance(col, str) else tuple(col) for col in cols]
         # 
@@ -193,16 +190,8 @@ def add_indexes(con, table, cols, data):
                 # 
             # Build index SQL query
             index_name = "idx_" + "_".join(col_tuple)
-            column_defs = []
-            # 
-            for col in col_tuple:
-                if col in data.columns and data[col].dtype == object:
-                    max_length = data[col].dropna().astype(str).str.len().max()
-                    index_length = min(max_length + 10, 255) if max_length else 255  # Ensure a reasonable length
-                    column_defs.append(f"`{col}`({index_length})")
-                else:
-                    column_defs.append(f"`{col}`")
-                    # 
+            column_defs = [f"`{col}`" for col in col_tuple]
+            #  
             index_sql = f"CREATE INDEX `{index_name}` ON `{table}` ({', '.join(column_defs)})"
             conn.execute(text(index_sql))
             print(f"Created index: {index_name}")
@@ -291,6 +280,11 @@ def check_timezone_support(engine):
 
 
 def put_table(con, table, col, data, index_cols=[]):
+    # Identify column indices where all values are NA
+    na_columns = [idx for idx in range(data.shape[1]) if data.iloc[:, idx].isna().mean() == 1]
+    # 
+    # Keep only the columns that are *not* in na_columns
+    data = data.iloc[:, [idx for idx in range(data.shape[1]) if idx not in na_columns]].copy()
     tz_support = check_timezone_support(con)
     required_types, _ = infer_sql_text_types(data, con)
     columns_to_update = check_table_schema(con, table, required_types)
@@ -312,12 +306,13 @@ def put_table(con, table, col, data, index_cols=[]):
     elif columns_to_update != False and len(columns_to_update.keys()) > 0:
         old_table = pd.read_sql_table(table, con)
         new_table = pd.concat([old_table, data], ignore_index=True).sort_index(axis=1)
+        required_types, _ = infer_sql_text_types(new_table, con)
         new_table.to_sql(
             name=table,
             index=False,
             if_exists='replace',
             con=con,
-            dtype=columns_to_update
+            dtype=required_types
         )
         add_indexes(con, table, [col, *index_cols], data)
     else:
@@ -326,6 +321,6 @@ def put_table(con, table, col, data, index_cols=[]):
             index=False,
             if_exists='fail',
             con=con,
-            dtype=columns_to_update
+            dtype=required_types
         )
         add_indexes(con, table, [col, *index_cols], data)
