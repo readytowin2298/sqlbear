@@ -1,3 +1,4 @@
+from datetime import timedelta
 from sqlalchemy import text
 from dateutil import tz
 import pytz
@@ -44,7 +45,28 @@ def normalize_timezone(server_timezone):
     if offset_match:
         hours, minutes = map(int, offset_match.groups())
         return tz.tzoffset(None, hours * 3600 + minutes * 60)  # Convert to fixed offset
+    print(f"Couldn't parse {server_timezone}, normalize_timezone falling back to UTC")
     return "UTC"  # Fallback if unrecognized
+
+
+def convert_timedelta_to_offset(td):
+    """
+    Converts a MySQL TIMEDIFF result (which is a timedelta object) into a standard "+HH:MM" or "-HH:MM" format.
+    
+    Example:
+        timedelta(hours=-5) -> "-05:00"
+        timedelta(hours=6, minutes=30) -> "+06:30"
+    """
+    if isinstance(td, timedelta):
+        total_seconds = td.total_seconds()
+        hours, remainder = divmod(abs(total_seconds), 3600)
+        minutes = remainder // 60
+        sign = "+" if total_seconds >= 0 else "-"
+        return f"{sign}{int(hours):02}:{int(minutes):02}"
+    
+    print(f"Warning: Unexpected TIMEDIFF result {td}, defaulting to UTC")
+    return "UTC"
+
 
 
 def get_server_timezone(engine):
@@ -53,8 +75,10 @@ def get_server_timezone(engine):
     with engine.connect() as conn:
         if dialect in ["mysql", "mariadb"]:
             result = conn.execute(text("SELECT @@global.time_zone;")).scalar()
-            if result in ("SYSTEM", "LOCAL"):
-                result = conn.execute(text("SELECT TIMEDIFF(NOW(), UTC_TIMESTAMP);")).scalar()
+            if result in ("SYSTEM", "LOCAL") or result is None:
+                # Retrieve offset as a timedelta object
+                timedelta_result = conn.execute(text("SELECT TIMEDIFF(NOW(), UTC_TIMESTAMP);")).scalar()
+                return convert_timedelta_to_offset(timedelta_result)
             return str(result)
         elif dialect == "postgresql":
             return conn.execute(text("SHOW TIMEZONE;")).scalar()
