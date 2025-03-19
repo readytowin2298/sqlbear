@@ -3,6 +3,7 @@ import sys
 import subprocess
 import pandas as pd
 import importlib.util
+from tqdm import tqdm
 from typing import Union
 from .bson_connector import ObjectId
 from collections.abc import Iterable
@@ -10,13 +11,17 @@ from sqlalchemy.engine.url import make_url
 from sqlalchemy import create_engine, inspect, text, TEXT, VARCHAR, NVARCHAR
 from sqlbear.sql_helpers import check_timezone_support
 
+
 class SQLBear:
     """A Wrapper to integrate the pandas library with a sqlalchemy connection engine. 
         Provide a connection string to initialize. Custom methods to help interact with 
         the sql server are provided, but the sqlalchemy connection engine is available at SQLBear.prototype.engine"""
-    def __init__(self, connection_string: str):
+    def __init__(self, connection_string: str, max_chunk_rows: Union[int, bool]=False):
         """Provide a connection string compliant with SQLAlchemy Connection URL standards, https://docs.sqlalchemy.org/en/20/core/engines.html"""
+        if max_chunk_rows and (type(max_chunk_rows) != int and not int(max_chunk_rows)):
+            raise Exception(f"Invalid max_chunk_rows: {max_chunk_rows}")
         self.ensure_connector_installed(connection_string)
+        self.max_chunk_rows = int(max_chunk_rows)
         self.engine = create_engine(connection_string)
     
     def ensure_connector_installed(self, conn_str: str) -> None:
@@ -229,9 +234,31 @@ class SQLBear:
                 conn.execute(text(index_sql))
                 print(f"Created index: {index_name}")
 
-
-
     def put_table(self, table: str, col: Union[str, Iterable], data: pd.DataFrame, index_cols: list=[]) -> None:
+        """
+        Insert or update a table in the database with the given DataFrame.
+        
+        This method checks for missing values, handles timezone conversions, and ensures
+        that the schema is correct before writing data to the SQL table. If necessary,
+        the existing table is replaced or updated.
+        
+        Parameters:
+        table (str): The name of the target table.
+        col (Union[str, Iterable]): The primary column(s) used for identifying records.
+        data (pd.DataFrame): The DataFrame containing data to be inserted.
+        index_cols (list, optional): Additional columns to be indexed after insertion.
+        
+        Returns:
+        None
+        
+        Notes:
+        - Drops any columns where all values are NaN.
+        - Ensures correct timezone handling based on the server's timezone configuration.
+        - Checks if the table schema matches the data and updates the schema if needed.
+        - If the table exists and matches the schema, it deletes conflicting rows before appending new data.
+        - If the schema has changed, it recreates the table with updated column types.
+        - Ensures indexes are added to the table after insertion.
+        """
         # Identify column indices where all values are NA
         na_columns = [idx for idx in range(data.shape[1]) if data.iloc[:, idx].isna().mean() == 1]
         # 
@@ -278,4 +305,54 @@ class SQLBear:
                 dtype=required_types
             )
             self.add_indexes(table, [col, *index_cols])
+    
+    def read_sql_query(self, sql:str, *args, chunksize=None, **kwargs) -> pd.DataFrame:
+        """
+        Execute a SQL query and return the result as a Pandas DataFrame.
+        
+        This method wraps `pandas.read_sql_query`, adding support for automatic chunking
+        and a progress bar when fetching large datasets, and of course providing the 
+        SQLBear connection to the database.
+        
+        Parameters:
+        sql (str): The SQL query to execute.
+        *args: Additional positional arguments passed to `pandas.read_sql_query`.
+            - The second argument, if provided, is treated as `index_col`.
+        chunksize (int, optional): Number of rows to fetch per chunk.
+            - If not provided, `self.max_chunk_rows` is used.
+        **kwargs: Additional keyword arguments passed to `pandas.read_sql_query`.
+            - If `index_col` is provided, it is preserved when concatenating chunks.
+        
+        Returns:
+        pd.DataFrame: The query result as a DataFrame.
+        
+        Notes:
+        - If `chunksize` or `self.max_chunk_rows` is set, the method first queries the total row count
+          and processes data in chunks, updating a progress bar.
+        - If an explicit `index_col` is provided, it is preserved.
+        - If no `index_col` is provided, the index is reset when concatenating chunks to avoid duplication.
+        """
+        chunksize = chunksize or self.max_chunk_rows
+        
+        # Check if index_col is explicitly provided
+        explicit_index_col = (len(args) > 0 and args[0] is not None) or ('index_col' in kwargs and kwargs['index_col'] is not None)
+        
+        if chunksize:
+            # Estimate total rows
+            count_query = f"SELECT COUNT(*) FROM ({sql}) AS subquery"
+            total_rows = pd.read_sql_query(count_query, self.engine).iloc[0, 0]
+            
+            num_chunks = (total_rows // chunksize) + (total_rows % chunksize > 0)
+            
+            # Initialize progress bar
+            with tqdm(total=total_rows, desc="Fetching data", unit="rows") as pbar:
+                chunks = []
+                for chunk in pd.read_sql_query(sql, self.engine, *args, chunksize=chunksize, **kwargs):
+                    chunks.append(chunk)
+                    pbar.update(len(chunk))
+                
+                # Preserve index if explicitly set; otherwise, ignore it to prevent duplication
+                return pd.concat(chunks, ignore_index=not explicit_index_col)
+        else:
+            return pd.read_sql_query(sql, self.engine, *args, **kwargs)
     
