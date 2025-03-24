@@ -23,3 +23,6 @@ pytest_cache/
 .vscode/
 .idea/
 *.swp
+
+# Sample data
+*.pkl
