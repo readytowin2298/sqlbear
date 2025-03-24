@@ -24,8 +24,8 @@ setup(
    author="Your Name",
    author_email="your.email@example.com",
    description="A pandas extension for easy SQL interaction",
-   long_description=open("README.md").read(),
-   long_description_content_type="text/markdown",
+   long_description=open("README.rst", encoding="utf-8").read(),
+   long_description_content_type="text/x-rst",  # Specify .rst format
    url="https://github.com/readytowin2298/sqlbear",
    classifiers=[
        "Programming Language :: Python :: 3",
