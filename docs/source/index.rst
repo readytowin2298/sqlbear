@@ -1,5 +1,5 @@
 .. SQLBear documentation master file, created by
-   sphinx-quickstart on Wed Mar 19 17:54:27 2025.
+   sphinx-quickstart on Mon Mar 24 11:03:07 2025.
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
@@ -11,15 +11,8 @@ Add your content using ``reStructuredText`` syntax. See the
 documentation for details.
 
 
-SQLBear Documentation
-=====================
-
 .. toctree::
    :maxdepth: 2
    :caption: Contents:
 
-   usage
-   api
-
-
-
+   modules

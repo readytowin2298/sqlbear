@@ -1,7 +1,7 @@
 import re
 import sys
-import subprocess
 import pandas as pd
+import subprocess
 import importlib.util
 from tqdm import tqdm
 from typing import Union
@@ -310,17 +310,17 @@ class SQLBear:
         """
         Execute a SQL query and return the result as a Pandas DataFrame.
         
-        This method wraps `pandas.read_sql_query`, adding support for automatic chunking
+        This method wraps `pd.read_sql_query`, adding support for automatic chunking
         and a progress bar when fetching large datasets, and of course providing the 
         SQLBear connection to the database.
         
         Parameters:
         sql (str): The SQL query to execute.
-        *args: Additional positional arguments passed to `pandas.read_sql_query`.
+        *args: Additional positional arguments passed to `pd.read_sql_query`.
             - The second argument, if provided, is treated as `index_col`.
         chunksize (int, optional): Number of rows to fetch per chunk.
             - If not provided, `self.max_chunk_rows` is used.
-        **kwargs: Additional keyword arguments passed to `pandas.read_sql_query`.
+        **kwargs: Additional keyword arguments passed to `pd.read_sql_query`.
             - If `index_col` is provided, it is preserved when concatenating chunks.
         
         Returns:
