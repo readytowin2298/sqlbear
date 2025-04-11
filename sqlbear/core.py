@@ -16,13 +16,28 @@ class SQLBear:
     """A Wrapper to integrate the pandas library with a sqlalchemy connection engine. 
         Provide a connection string to initialize. Custom methods to help interact with 
         the sql server are provided, but the sqlalchemy connection engine is available at SQLBear.prototype.engine"""
-    def __init__(self, connection_string: str, max_chunk_rows: Union[int, bool]=False):
-        """Provide a connection string compliant with SQLAlchemy Connection URL standards, https://docs.sqlalchemy.org/en/20/core/engines.html"""
+    def __init__(self, connection_string: str, max_chunk_rows: Union[int, bool]=False, lock_tables_before_put: bool=False):
+        """
+            Initialize a SQLBear instance with a database connection.
+
+            Parameters:
+            connection_string (str): A valid SQLAlchemy connection string. Follows the format and requirements 
+                                    defined by SQLAlchemy: https://docs.sqlalchemy.org/en/20/core/engines.html
+            max_chunk_rows (Union[int, bool], optional): If set to an integer, this value is used as the default 
+                                    maximum number of rows per chunk for read and write operations.
+                                    Set to False to disable chunking (default: False).
+            lock_tables_before_put (bool, optional): If True, will attempt to acquire a write lock on tables 
+                                    before running 'put_table' operations (MySQL only). Defaults to False.
+
+            Raises:
+            Exception: If max_chunk_rows is not a valid integer or boolean-convertible value.
+        """
         if max_chunk_rows and (type(max_chunk_rows) != int and not int(max_chunk_rows)):
             raise Exception(f"Invalid max_chunk_rows: {max_chunk_rows}")
         self.ensure_connector_installed(connection_string)
         self.max_chunk_rows = int(max_chunk_rows)
         self.engine = create_engine(connection_string)
+        self.lock_tables_before_put =  lock_tables_before_put
     
     def ensure_connector_installed(self, conn_str: str) -> None:
         """Ensures that the required database driver for the connection string is installed."""
@@ -95,23 +110,27 @@ class SQLBear:
             # Infer text column types
             suggested_types = {}
             error_list = []
-            for col in df.select_dtypes(include=[object, "string"]):
-                max_length = df[col].dropna().astype(str).str.len().max()
-                # Suggest field type based on max string length
-                if max_length is None or max_length == 0:
-                    suggested_types[col] = TEXT()  # Default to TEXT if unknown
-                elif max_length <= 255:
-                    suggested_types[col] = VARCHAR(max_length)
-                elif max_length <= 4000 and dialect == "mssql":
-                    suggested_types[col] = NVARCHAR(max_length)
+            str_cols = df.select_dtypes(include=[object, "string"]).columns.unique()
+            for col in df.columns.unique():
+                if col in str_cols:
+                    max_length = df[col].dropna().astype(str).str.len().max()
+                    # Suggest field type based on max string length
+                    if max_length is None or max_length == 0:
+                        suggested_types[col] = TEXT()  # Default to TEXT if unknown
+                    elif max_length <= 255:
+                        suggested_types[col] = VARCHAR(max_length)
+                    elif max_length <= 4000 and dialect == "mssql":
+                        suggested_types[col] = NVARCHAR(max_length)
+                    else:
+                        suggested_types[col] = TEXT(max_length)
+                    # Scan for illegal characters if any are defined
+                    if illegal_chars:
+                        offending_rows = df[col].dropna().apply(lambda x: any(c in illegal_chars for c in str(x)))
+                        if offending_rows.any():
+                            indexes = df.index[offending_rows].tolist()
+                            error_list.append((col, indexes, "\n", df.loc[indexes, col], "\n"))
                 else:
-                    suggested_types[col] = TEXT(max_length)
-                # Scan for illegal characters if any are defined
-                if illegal_chars:
-                    offending_rows = df[col].dropna().apply(lambda x: any(c in illegal_chars for c in str(x)))
-                    if offending_rows.any():
-                        indexes = df.index[offending_rows].tolist()
-                        error_list.append((col, indexes, "\n", df.loc[indexes, col], "\n"))
+                    suggested_types[col] = 'PLACEHOLDER'
             # Raise error if illegal characters are found
             if error_list:
                 raise ValueError(f"Illegal characters found in columns: {error_list}")
@@ -144,7 +163,7 @@ class SQLBear:
             required_type = str(required_type).upper()  # Normalize input
             if col not in existing_columns:
                 columns_to_update[col] = required_type  # Column is missing, needs creation
-            else:
+            elif required_type != 'PLACEHOLDER':
                 existing_type = existing_columns[col]
                 # Handle VARCHAR(N) and NVARCHAR(N) types
                 required_match = re.match(r"(NVARCHAR|VARCHAR)\((\d+)\)", required_type)
@@ -233,31 +252,73 @@ class SQLBear:
                 index_sql = f"CREATE INDEX `{index_name}` ON `{table}` ({', '.join(column_defs)})"
                 conn.execute(text(index_sql))
                 print(f"Created index: {index_name}")
-
-    def put_table(self, table: str, col: Union[str, Iterable], data: pd.DataFrame, index_cols: list=[]) -> None:
+    
+    def lock_table(self, table: str):
         """
-        Insert or update a table in the database with the given DataFrame.
-        
-        This method checks for missing values, handles timezone conversions, and ensures
-        that the schema is correct before writing data to the SQL table. If necessary,
-        the existing table is replaced or updated.
-        
-        Parameters:
-        table (str): The name of the target table.
-        col (Union[str, Iterable]): The primary column(s) used for identifying records.
-        data (pd.DataFrame): The DataFrame containing data to be inserted.
-        index_cols (list, optional): Additional columns to be indexed after insertion.
-        
-        Returns:
-        None
-        
-        Notes:
-        - Drops any columns where all values are NaN.
-        - Ensures correct timezone handling based on the server's timezone configuration.
-        - Checks if the table schema matches the data and updates the schema if needed.
-        - If the table exists and matches the schema, it deletes conflicting rows before appending new data.
-        - If the schema has changed, it recreates the table with updated column types.
-        - Ensures indexes are added to the table after insertion.
+            Attempt to acquire a WRITE lock on a table (MySQL only).
+
+            Parameters:
+            table (str): The name of the table to lock.
+
+            Notes:
+            - This method only applies to MySQL databases.
+            - If the specified table does not exist, no action is taken.
+            - The lock is applied at the session level and must be released via `unlock_tables()`.
+        """
+        if self.engine.dialect.name.lower() == 'mysql':
+            inspector = inspect(self.engine)
+            existing_columns = {}
+            # Check if the table exists
+            if table not in inspector.get_table_names():
+                return 
+            with self.engine.connect() as connection:
+                with connection.begin() as transaction:
+                    connection.execute(text(f"LOCK TABLE {table} WRITE"))
+
+    def unlock_tables(self):
+        """
+            Release all table locks held in the current MySQL session.
+
+            Notes:
+            - This method only applies to MySQL databases.
+            - Must be called after `lock_table()` to avoid holding locks indefinitely.
+        """
+        if self.engine.dialect.name.lower() == 'mysql':
+            with self.engine.connect() as connection:
+                with connection.begin() as transaction:
+                    connection.execute(text(f"UNLOCK TABLES"))
+
+
+    def put_table(self, table: str, col: Union[str, Iterable], data: pd.DataFrame, index_cols: list=[], lock_tables_before_put: Union[bool, None]=None, replace=False) -> None:
+        """
+            Insert or update a table in the database with the given DataFrame.
+
+            This method checks for missing values, handles timezone conversions, and ensures
+            that the schema is correct before writing data to the SQL table. If necessary,
+            the existing table is replaced or updated.
+
+            Parameters:
+            table (str): The name of the target table.
+            col (Union[str, Iterable]): The primary column(s) used for identifying records.
+            data (pd.DataFrame): The DataFrame containing data to be inserted.
+            index_cols (list, optional): Additional columns to be indexed after insertion.
+            lock_tables_before_put (Union[bool, None], optional): Overrides the default behavior set in the class.
+                If True, attempts to lock the table before modifying it (MySQL only). Defaults to None.
+            replace (bool, optional): If True, the table will be fully replaced with the new data,
+                dropping any existing rows and schema. Defaults to False.
+
+            Returns:
+            None
+
+            Notes:
+            - Drops any columns where all values are NaN.
+            - Ensures correct timezone handling based on the server's timezone configuration.
+            - Checks if the table schema matches the DataFrame and updates the schema if needed.
+            - If the schema matches, conflicting rows are deleted before inserting new data.
+            - If the schema differs or `replace=True`, the table is dropped and recreated.
+            - Adds indexes on specified columns after writing.
+            - Optionally locks and unlocks the target table (MySQL only) if `lock_tables_before_put` is True.
+            - Table locking is useful in concurrent environments to prevent write conflicts during replacement.
         """
         # Identify column indices where all values are NA
         na_columns = [idx for idx in range(data.shape[1]) if data.iloc[:, idx].isna().mean() == 1]
@@ -269,42 +330,66 @@ class SQLBear:
         columns_to_update = self.check_table_schema(table, required_types)
         # If server is tz unaware this property will be the local timezone of the server and all 
         # timestamps will be converted to that timezone before writing to the database
+        print(f"Replace: {replace}")
         if tz_support['server_timezone']: 
             timestamps = []
             for this_col in data.select_dtypes(include=["datetime"]).columns.tolist():
                 data[this_col] = pd.to_datetime(data[this_col]).apply(lambda x: x.tz_localize("UTC") if x is not None and x.tzinfo is None else x)
                 data[this_col] = data[this_col].dt.tz_convert(tz_support['server_timezone'])
                 data[this_col] = data[this_col].dt.tz_localize(None)
-        if columns_to_update != False and len(columns_to_update.keys()) == 0:
-            self.delete_from_table(table, col, data[col].apply(lambda x: str(x) if isinstance(x, ObjectId) else x))
-            data.to_sql(
-                name=table,
-                index=False,
-                if_exists='append',
-                con=self.engine
-            )
-            self.add_indexes(table, [col, *index_cols])
-        elif columns_to_update != False and len(columns_to_update.keys()) > 0:
-            old_table = pd.read_sql_table(table, self.engine)
-            new_table = pd.concat([old_table, data], ignore_index=True).sort_index(axis=1)
-            required_types, _ = self.infer_sql_text_types(new_table)
-            new_table.to_sql(
-                name=table,
-                index=False,
-                if_exists='replace',
-                con=self.engine,
-                dtype=required_types
-            )
-            self.add_indexes(table, [col, *index_cols])
-        else:
-            data.sort_index(axis=1).to_sql(
-                name=table,
-                index=False,
-                if_exists='fail',
-                con=self.engine,
-                dtype=required_types
-            )
-            self.add_indexes(table, [col, *index_cols])
+            if lock_tables_before_put or self.lock_tables_before_put:
+                self.lock_table(table)
+        try:
+            if columns_to_update != False and len(columns_to_update.keys()) == 0 and not replace:
+                self.delete_from_table(table, col, data[col].apply(lambda x: str(x) if isinstance(x, ObjectId) else x))
+                print("First Write")
+                data.to_sql(
+                    name=table,
+                    index=False,
+                    if_exists='append',
+                    con=self.engine
+                )
+                self.add_indexes(table, [col, *index_cols])
+            elif (columns_to_update != False and len(columns_to_update.keys()) > 0) or replace:
+                print("Second Write")
+                if not replace:
+                    old_table = pd.read_sql_table(table, self.engine)
+                    new_table = pd.concat([old_table, data], ignore_index=True).sort_index(axis=1)
+                    required_types, _ = self.infer_sql_text_types(new_table)
+                    new_table.to_sql(
+                        name=table,
+                        index=False,
+                        if_exists='replace',
+                        con=self.engine,
+                        dtype={ key : val for key, val in required_types.items() if val != 'PLACEHOLDER'}
+                    )
+                    self.add_indexes(table, [col, *index_cols])
+                else:
+                    print("Third Write")
+                    required_types, _ = self.infer_sql_text_types(data)
+                    data.to_sql(
+                        name=table,
+                        index=False,
+                        if_exists='replace',
+                        con=self.engine,
+                        dtype={ key : val for key, val in required_types.items() if val != 'PLACEHOLDER'}
+                    )
+            else:
+                print("Third Write")
+                data.sort_index(axis=1).to_sql(
+                    name=table,
+                    index=False,
+                    if_exists='fail',
+                    con=self.engine,
+                    dtype={ key : val for key, val in required_types.items() if val != 'PLACEHOLDER'}
+                )
+                self.add_indexes(table, [col, *index_cols])
+            if lock_tables_before_put or self.lock_tables_before_put:
+                self.unlock_tables()
+        except:
+            if lock_tables_before_put or self.lock_tables_before_put:
+                self.unlock_tables()
+            raise
     
     def read_sql_query(self, sql:str, *args, chunksize=None, **kwargs) -> pd.DataFrame:
         """
