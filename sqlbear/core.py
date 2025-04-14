@@ -347,7 +347,8 @@ class SQLBear:
                     name=table,
                     index=False,
                     if_exists='append',
-                    con=self.engine
+                    con=self.engine,
+                    chunksize=self.max_chunk_rows
                 )
                 self.add_indexes(table, [col, *index_cols])
             elif (columns_to_update != False and len(columns_to_update.keys()) > 0) or replace:
@@ -361,7 +362,8 @@ class SQLBear:
                         index=False,
                         if_exists='replace',
                         con=self.engine,
-                        dtype={ key : val for key, val in required_types.items() if val != 'PLACEHOLDER'}
+                        dtype={ key : val for key, val in required_types.items() if val != 'PLACEHOLDER'},
+                        chunksize=self.max_chunk_rows
                     )
                     self.add_indexes(table, [col, *index_cols])
                 else:
@@ -372,7 +374,8 @@ class SQLBear:
                         index=False,
                         if_exists='replace',
                         con=self.engine,
-                        dtype={ key : val for key, val in required_types.items() if val != 'PLACEHOLDER'}
+                        dtype={ key : val for key, val in required_types.items() if val != 'PLACEHOLDER'},
+                        chunksize=self.max_chunk_rows
                     )
             else:
                 print("Third Write")
@@ -381,7 +384,8 @@ class SQLBear:
                     index=False,
                     if_exists='fail',
                     con=self.engine,
-                    dtype={ key : val for key, val in required_types.items() if val != 'PLACEHOLDER'}
+                    dtype={ key : val for key, val in required_types.items() if val != 'PLACEHOLDER'},
+                    chunksize=self.max_chunk_rows
                 )
                 self.add_indexes(table, [col, *index_cols])
             if lock_tables_before_put or self.lock_tables_before_put:
