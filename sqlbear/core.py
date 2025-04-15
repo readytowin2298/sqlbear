@@ -226,32 +226,44 @@ class SQLBear:
     
     def add_indexes(self, table: str, cols: list) -> None:
         """
-        Adds indexes to the specified columns in a table if they are not already indexed.
-        
-        Parameters:
-            con (sqlalchemy.engine.base.Engine): The SQLAlchemy connection engine.
-            table (str): The name of the table to modify.
-            cols (list): A list of column names or iterables of column names for multi-column indexes.
-            data (pd.DataFrame): The dataframe containing the table's data to determine string lengths.
+            Adds indexes to the specified columns in a table if they are not already indexed.
+            
+            Parameters:
+                table (str): The name of the table to modify.
+                cols (list): A list of:
+                    - column names as strings (e.g., "col1")
+                    - or tuples/lists of (col_name, length) (e.g., ("col1", 191))
+                    - or nested iterables for multi-column indexes (e.g., [("col1", 191), "col2"])
         """
-        # Query existing indexes on the table
-        df = pd.read_sql_query(f"SHOW INDEX FROM {table}", self.engine)
+        # Normalize: always turn into list of lists of (col_name, length)
+        normalized = []
+        for item in cols:
+            if isinstance(item, (str, tuple)):
+                group = [item]
+            else:
+                group = item  # already iterable of columns
+            # 
+            normalized.append([
+                (col, None) if isinstance(col, str) else tuple(col)
+                for col in group
+            ])
+        # Check existing indexes
+        df = pd.read_sql_query(f"SHOW INDEX FROM `{table}`", self.engine)
         existing_indexes = set([tuple(group["Column_name"]) for _, group in df.groupby("Key_name")])
-        # Convert column definitions to tuples for easy comparison
-        cols_to_index = [tuple([col]) if isinstance(col, str) else tuple(col) for col in cols]
-        # 
         with self.engine.connect() as conn:
-            for col_tuple in cols_to_index:
-                if col_tuple in existing_indexes:
-                    continue  # Skip if index already exists
-                    # 
-                # Build index SQL query
-                index_name = "idx_" + "_".join(col_tuple)
-                column_defs = [f"`{col}`" for col in col_tuple]
-                #  
+            for col_group in normalized:
+                col_names = tuple(col for col, _ in col_group)
+                if col_names in existing_indexes:
+                    continue
+                index_name = "idx_" + "_".join(col_names)
+                column_defs = [
+                    f"`{col}`({length})" if length is not None else f"`{col}`"
+                    for col, length in col_group
+                ]
                 index_sql = f"CREATE INDEX `{index_name}` ON `{table}` ({', '.join(column_defs)})"
                 conn.execute(text(index_sql))
                 print(f"Created index: {index_name}")
+
     
     def lock_table(self, table: str):
         """
@@ -288,6 +300,25 @@ class SQLBear:
                 with connection.begin() as transaction:
                     connection.execute(text(f"UNLOCK TABLES"))
 
+    def normalize_columns_and_keys(self, columns, required_types):
+        """Accepts list of columns or list of columns 
+            and dict of types, prepares columns to be 
+            made into sql indexes, specifying a length 
+            if string"""
+        columns_to_index = []
+        for label in columns:
+            if type(label) == str:
+                columns_to_index.append(
+                    label if not required_types[label] or required_types[label] == 'PLACEHOLDER' or not required_types[label].length else (label, required_types[label].length)
+                )
+            else:
+                to_label = []
+                for mark in label:
+                    to_label.append(
+                        mark if not required_types[mark] or required_types[mark] == 'PLACEHOLDER' or not required_types[mark].length else (mark, required_types[mark].length)
+                    )
+                columns_to_index.append(to_label)
+        return columns_to_index
 
     def put_table(self, table: str, col: Union[str, Iterable], data: pd.DataFrame, index_cols: list=[], lock_tables_before_put: Union[bool, None]=None, replace=False) -> None:
         """
@@ -330,19 +361,17 @@ class SQLBear:
         columns_to_update = self.check_table_schema(table, required_types)
         # If server is tz unaware this property will be the local timezone of the server and all 
         # timestamps will be converted to that timezone before writing to the database
-        print(f"Replace: {replace}")
         if tz_support['server_timezone']: 
             timestamps = []
             for this_col in data.select_dtypes(include=["datetime"]).columns.tolist():
                 data[this_col] = pd.to_datetime(data[this_col]).apply(lambda x: x.tz_localize("UTC") if x is not None and x.tzinfo is None else x)
                 data[this_col] = data[this_col].dt.tz_convert(tz_support['server_timezone'])
                 data[this_col] = data[this_col].dt.tz_localize(None)
-            if lock_tables_before_put or self.lock_tables_before_put:
-                self.lock_table(table)
+        if lock_tables_before_put or self.lock_tables_before_put:
+            self.lock_table(table)
         try:
             if columns_to_update != False and len(columns_to_update.keys()) == 0 and not replace:
                 self.delete_from_table(table, col, data[col].apply(lambda x: str(x) if isinstance(x, ObjectId) else x))
-                print("First Write")
                 data.to_sql(
                     name=table,
                     index=False,
@@ -350,9 +379,9 @@ class SQLBear:
                     con=self.engine,
                     chunksize=self.max_chunk_rows
                 )
-                self.add_indexes(table, [col, *index_cols])
+                columns_to_index = self.normalize_columns_and_keys([col, *index_cols], required_types)
+                self.add_indexes(table, columns_to_index)
             elif (columns_to_update != False and len(columns_to_update.keys()) > 0) or replace:
-                print("Second Write")
                 if not replace:
                     old_table = pd.read_sql_table(table, self.engine)
                     new_table = pd.concat([old_table, data], ignore_index=True).sort_index(axis=1)
@@ -365,9 +394,9 @@ class SQLBear:
                         dtype={ key : val for key, val in required_types.items() if val != 'PLACEHOLDER'},
                         chunksize=self.max_chunk_rows
                     )
-                    self.add_indexes(table, [col, *index_cols])
+                    columns_to_index = self.normalize_columns_and_keys([col, *index_cols], required_types)
+                    self.add_indexes(table, columns_to_index)
                 else:
-                    print("Third Write")
                     required_types, _ = self.infer_sql_text_types(data)
                     data.to_sql(
                         name=table,
@@ -377,8 +406,9 @@ class SQLBear:
                         dtype={ key : val for key, val in required_types.items() if val != 'PLACEHOLDER'},
                         chunksize=self.max_chunk_rows
                     )
+                    columns_to_index = self.normalize_columns_and_keys([col, *index_cols], required_types)
+                    self.add_indexes(table, columns_to_index)
             else:
-                print("Third Write")
                 data.sort_index(axis=1).to_sql(
                     name=table,
                     index=False,
@@ -387,7 +417,8 @@ class SQLBear:
                     dtype={ key : val for key, val in required_types.items() if val != 'PLACEHOLDER'},
                     chunksize=self.max_chunk_rows
                 )
-                self.add_indexes(table, [col, *index_cols])
+                columns_to_index = self.normalize_columns_and_keys([col, *index_cols], required_types)
+                self.add_indexes(table, columns_to_index)
             if lock_tables_before_put or self.lock_tables_before_put:
                 self.unlock_tables()
         except:
