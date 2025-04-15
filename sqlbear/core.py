@@ -288,6 +288,10 @@ class SQLBear:
                 with connection.begin() as transaction:
                     connection.execute(text(f"UNLOCK TABLES"))
 
+    def extract_parenthesis_content(s: str) -> str | None:
+        """Helper function to extract the contents of parentheses"""
+        match = re.search(r'\(([^)]+)\)', s)
+        return match.group(1) if match else None
 
     def put_table(self, table: str, col: Union[str, Iterable], data: pd.DataFrame, index_cols: list=[], lock_tables_before_put: Union[bool, None]=None, replace=False) -> None:
         """
@@ -337,8 +341,8 @@ class SQLBear:
                 data[this_col] = pd.to_datetime(data[this_col]).apply(lambda x: x.tz_localize("UTC") if x is not None and x.tzinfo is None else x)
                 data[this_col] = data[this_col].dt.tz_convert(tz_support['server_timezone'])
                 data[this_col] = data[this_col].dt.tz_localize(None)
-            if lock_tables_before_put or self.lock_tables_before_put:
-                self.lock_table(table)
+        if lock_tables_before_put or self.lock_tables_before_put:
+            self.lock_table(table)
         try:
             if columns_to_update != False and len(columns_to_update.keys()) == 0 and not replace:
                 self.delete_from_table(table, col, data[col].apply(lambda x: str(x) if isinstance(x, ObjectId) else x))
@@ -350,10 +354,11 @@ class SQLBear:
                     con=self.engine,
                     chunksize=self.max_chunk_rows
                 )
-                self.add_indexes(table, [col, *index_cols])
+                self.add_indexes(table, [ (x, self.extract_parenthesis_content(required_types[x])) if required_types[x] != 'PLACEHOLDER' else x for x in [col, *index_cols]])
             elif (columns_to_update != False and len(columns_to_update.keys()) > 0) or replace:
                 print("Second Write")
                 if not replace:
+                    self.delete_from_table(table, col, data[col].apply(lambda x: str(x) if isinstance(x, ObjectId) else x))
                     old_table = pd.read_sql_table(table, self.engine)
                     new_table = pd.concat([old_table, data], ignore_index=True).sort_index(axis=1)
                     required_types, _ = self.infer_sql_text_types(new_table)
@@ -365,7 +370,7 @@ class SQLBear:
                         dtype={ key : val for key, val in required_types.items() if val != 'PLACEHOLDER'},
                         chunksize=self.max_chunk_rows
                     )
-                    self.add_indexes(table, [col, *index_cols])
+                    self.add_indexes(table, [ (x, self.extract_parenthesis_content(required_types[x])) if required_types[x] != 'PLACEHOLDER' else x for x in [col, *index_cols]])
                 else:
                     print("Third Write")
                     required_types, _ = self.infer_sql_text_types(data)
@@ -377,6 +382,7 @@ class SQLBear:
                         dtype={ key : val for key, val in required_types.items() if val != 'PLACEHOLDER'},
                         chunksize=self.max_chunk_rows
                     )
+                    self.add_indexes(table, [ (x, self.extract_parenthesis_content(required_types[x])) if required_types[x] != 'PLACEHOLDER' else x for x in [col, *index_cols]])
             else:
                 print("Third Write")
                 data.sort_index(axis=1).to_sql(
@@ -387,7 +393,7 @@ class SQLBear:
                     dtype={ key : val for key, val in required_types.items() if val != 'PLACEHOLDER'},
                     chunksize=self.max_chunk_rows
                 )
-                self.add_indexes(table, [col, *index_cols])
+                self.add_indexes(table, [ (x, self.extract_parenthesis_content(required_types[x])) if required_types[x] != 'PLACEHOLDER' else x for x in [col, *index_cols]])
             if lock_tables_before_put or self.lock_tables_before_put:
                 self.unlock_tables()
         except:
