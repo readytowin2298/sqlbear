@@ -383,8 +383,8 @@ class SQLBear:
                 self.add_indexes(table, columns_to_index)
             elif (columns_to_update != False and len(columns_to_update.keys()) > 0) or replace:
                 if not replace:
-                    old_table = pd.read_sql_table(table, self.engine)
                     self.delete_from_table(table, col, data[col].apply(lambda x: str(x) if isinstance(x, ObjectId) else x))
+                    old_table = pd.read_sql_table(table, self.engine)
                     new_table = pd.concat([old_table, data], ignore_index=True).sort_index(axis=1)
                     required_types, _ = self.infer_sql_text_types(new_table)
                     new_table.to_sql(
