@@ -8,7 +8,7 @@ from typing import Union
 from .bson_connector import ObjectId
 from collections.abc import Iterable
 from sqlalchemy.engine.url import make_url
-from sqlalchemy import create_engine, inspect, text, TEXT, VARCHAR, NVARCHAR
+from sqlalchemy import create_engine, inspect, text, TEXT, VARCHAR
 from sqlbear.sql_helpers import check_timezone_support
 
 
@@ -16,7 +16,7 @@ class SQLBear:
     """A Wrapper to integrate the pandas library with a sqlalchemy connection engine. 
         Provide a connection string to initialize. Custom methods to help interact with 
         the sql server are provided, but the sqlalchemy connection engine is available at SQLBear.prototype.engine"""
-    def __init__(self, connection_string: str, max_chunk_rows: Union[int, bool]=False, lock_tables_before_put: bool=False):
+    def __init__(self, connection_string: str, max_chunk_rows: Union[int, bool]=False, lock_tables_before_put: bool=False, string_size_buffer: float = 0.1):
         """
             Initialize a SQLBear instance with a database connection.
 
@@ -28,6 +28,9 @@ class SQLBear:
                                     Set to False to disable chunking (default: False).
             lock_tables_before_put (bool, optional): If True, will attempt to acquire a write lock on tables 
                                     before running 'put_table' operations (MySQL only). Defaults to False.
+            string_size_buffer (float, default: 0.1): When altering string columns, apply this buffer to the 
+                                    maximum string length to set size for VARCHAR and NVARCHAR columns. Results 
+                                    in something like VARCHAR(df[col].str.len().max() * ( 1 + self.string_size_buffer)) 
 
             Raises:
             Exception: If max_chunk_rows is not a valid integer or boolean-convertible value.
@@ -38,6 +41,7 @@ class SQLBear:
         self.max_chunk_rows = int(max_chunk_rows)
         self.engine = create_engine(connection_string)
         self.lock_tables_before_put =  lock_tables_before_put
+        self.string_size_buffer = string_size_buffer
     
     def ensure_connector_installed(self, conn_str: str) -> None:
         """Ensures that the required database driver for the connection string is installed."""
@@ -68,17 +72,20 @@ class SQLBear:
         else:
             return
         
-    def infer_sql_text_types(self, df: pd.DataFrame) -> tuple[dict, dict]:
+    def infer_sql_text_types(self, df: pd.DataFrame, buffer_ratio: float = 0.0) -> tuple[dict, dict]:
         """
         Infers the best SQL text field types for a Pandas DataFrame and scans for illegal characters.
         Args:
             df (pd.DataFrame): The input DataFrame.
-            connection (sqlalchemy.engine.base.Connection): An active SQLAlchemy connection.
+            buffer_ratio (float, default: 0.0): Apply buffer over maximum string length to leave room for gowth in table.
+                    - If != 0, makes return invalid argument for self.check_table_schema method.
         Returns:
             tuple: (dict of suggested SQL column types, dict of database charset info)
         Raises:
             ValueError: If illegal characters are found in any column.
         """
+        if buffer_ratio < 0:
+            raise ValueError(f"Buffer ratio must be at least 0 for the table to fit!!! You put {buffer_ratio}")
         # Query database for charset and collation
         with self.engine.connect() as connection:
             dialect = connection.engine.dialect.name.lower()
@@ -113,14 +120,12 @@ class SQLBear:
             str_cols = df.select_dtypes(include=[object, "string"]).columns.unique()
             for col in df.columns.unique():
                 if col in str_cols:
-                    max_length = df[col].dropna().astype(str).str.len().max()
+                    max_length = df[col].dropna().astype(str).str.len().max() * (1 + buffer_ratio)
                     # Suggest field type based on max string length
                     if max_length is None or max_length == 0:
-                        suggested_types[col] = TEXT()  # Default to TEXT if unknown
-                    elif max_length <= 255:
+                        suggested_types[col] = 'PLACEHOLDER'  # Default to TEXT if unknown
+                    elif max_length <= 16000:
                         suggested_types[col] = VARCHAR(max_length)
-                    elif max_length <= 4000 and dialect == "mssql":
-                        suggested_types[col] = NVARCHAR(max_length)
                     else:
                         suggested_types[col] = TEXT(max_length)
                     # Scan for illegal characters if any are defined
@@ -319,6 +324,9 @@ class SQLBear:
                     )
                 columns_to_index.append(to_label)
         return columns_to_index
+    
+    def filter_columns_to_update(columns_to_update):
+        """Accepts columns_to_update dictionary and filters out PLACEHOLDER, and TEXT if Mysql"""
 
     def put_table(self, table: str, col: Union[str, Iterable], data: pd.DataFrame, index_cols: list=[], lock_tables_before_put: Union[bool, None]=None, replace=False) -> None:
         """
@@ -383,10 +391,11 @@ class SQLBear:
                 self.add_indexes(table, columns_to_index)
             elif (columns_to_update != False and len(columns_to_update.keys()) > 0) or replace:
                 if not replace:
+                    # raise ValueError("We shouldn't be calling this now")
                     self.delete_from_table(table, col, data[col].apply(lambda x: str(x) if isinstance(x, ObjectId) else x))
                     old_table = pd.read_sql_table(table, self.engine)
                     new_table = pd.concat([old_table, data], ignore_index=True).sort_index(axis=1)
-                    required_types, _ = self.infer_sql_text_types(new_table)
+                    required_types, _ = self.infer_sql_text_types(new_table, self.string_size_buffer)
                     new_table.to_sql(
                         name=table,
                         index=False,
@@ -398,7 +407,7 @@ class SQLBear:
                     columns_to_index = self.normalize_columns_and_keys([col, *index_cols], required_types)
                     self.add_indexes(table, columns_to_index)
                 else:
-                    required_types, _ = self.infer_sql_text_types(data)
+                    required_types, _ = self.infer_sql_text_types(data, self.string_size_buffer)
                     data.to_sql(
                         name=table,
                         index=False,
@@ -410,6 +419,7 @@ class SQLBear:
                     columns_to_index = self.normalize_columns_and_keys([col, *index_cols], required_types)
                     self.add_indexes(table, columns_to_index)
             else:
+                required_types, _ = self.infer_sql_text_types(data, self.string_size_buffer)
                 data.sort_index(axis=1).to_sql(
                     name=table,
                     index=False,
