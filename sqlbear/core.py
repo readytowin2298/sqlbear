@@ -262,7 +262,7 @@ class SQLBear:
                     continue
                 index_name = "idx_" + "_".join(col_names)
                 column_defs = [
-                    f"`{col}`({length})" if length is not None else f"`{col}`"
+                    f"`{col}`({int(length)})" if length is not None else f"`{col}`"
                     for col, length in col_group
                 ]
                 index_sql = f"CREATE INDEX `{index_name}` ON `{table}` ({', '.join(column_defs)})"
