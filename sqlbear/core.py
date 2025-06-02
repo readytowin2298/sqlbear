@@ -124,7 +124,7 @@ class SQLBear:
                     # Suggest field type based on max string length
                     if max_length is None or max_length == 0:
                         suggested_types[col] = 'PLACEHOLDER'  # Default to TEXT if unknown
-                    elif max_length <= 16000:
+                    elif max_length <= 1000:
                         suggested_types[col] = VARCHAR(max_length)
                     else:
                         suggested_types[col] = TEXT(max_length)
