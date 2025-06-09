@@ -325,10 +325,42 @@ class SQLBear:
                 columns_to_index.append(to_label)
         return columns_to_index
     
-    def filter_columns_to_update(columns_to_update):
-        """Accepts columns_to_update dictionary and filters out PLACEHOLDER, and TEXT if Mysql"""
+    def force_schema_match(self, table, data):
+        """Queries database table info for column defs, shortens any strings that won't fit and adds
+         ..., drops any columns that don't yet exist in the database"""
+        schema = pd.read_sql_query(
+            f"""SELECT 
+                    COLUMN_NAME,
+                    DATA_TYPE,
+                    CHARACTER_SET_NAME,
+                    COLLATION_NAME,
+                    CHARACTER_MAXIMUM_LENGTH
+                FROM 
+                    INFORMATION_SCHEMA.COLUMNS
+                WHERE 
+                    TABLE_SCHEMA = '{self.engine.url.database}'
+                    AND TABLE_NAME = '{table}'""", con=self.engine
+        )
+        problems = []
+        missing_cols = [col for col in data.colunms.unique() if col not in schema.COLUMN_NAME.unique()]
+        for row in schema.to_dict(orient='records'):
+            col = row['COLUMN_NAME']
+            max_len = row['CHARACTER_MAXIMUM_LENGTH']
+            if pd.notnull(max_len):
+                max_actual_len = data[col].astype(str).str.len().max()
+                if max_actual_len > max_len:
+                    problems.append({
+                            'column': col,
+                            'max_allowed': max_len,
+                            'actual_max': max_actual_len
+                        })
+        # problems = problems
+        data.drop(missing_cols, axis=1, inplace=True)
+        for problem in problems:
+            data[problem['column']] = data[problem['column']].fillna('').apply(lambda x: x if len(x) <= problem['max_allowed'] else x[: int(problem['max_allowed'] - 3)] + '...')
+        return data
 
-    def put_table(self, table: str, col: Union[str, Iterable], data: pd.DataFrame, index_cols: list=[], lock_tables_before_put: Union[bool, None]=None, replace=False) -> None:
+    def put_table(self, table: str, col: Union[str, Iterable], data: pd.DataFrame, index_cols: list=[], lock_tables_before_put: Union[bool, None]=None, replace: bool=False, force_schema_match: bool=False) -> None:
         """
             Insert or update a table in the database with the given DataFrame.
 
@@ -345,6 +377,8 @@ class SQLBear:
                 If True, attempts to lock the table before modifying it (MySQL only). Defaults to None.
             replace (bool, optional): If True, the table will be fully replaced with the new data,
                 dropping any existing rows and schema. Defaults to False.
+            force_schema_match (bool, optional): If true, will force provided dataframe to fit into column 
+                definitions already set in the table, designed to easliy allow preventing peak-usage table detruction and recreation
 
             Returns:
             None
@@ -364,6 +398,8 @@ class SQLBear:
         # 
         # Keep only the columns that are *not* in na_columns
         data = data.iloc[:, [idx for idx in range(data.shape[1]) if idx not in na_columns]].copy()
+        if force_schema_match:
+            data = self.force_schema_match(table, data)
         tz_support = check_timezone_support(self.engine)
         required_types, _ = self.infer_sql_text_types(data)
         columns_to_update = self.check_table_schema(table, required_types)
@@ -378,7 +414,7 @@ class SQLBear:
         if lock_tables_before_put or self.lock_tables_before_put:
             self.lock_table(table)
         try:
-            if columns_to_update != False and len(columns_to_update.keys()) == 0 and not replace:
+            if (columns_to_update != False and len(columns_to_update.keys()) == 0 and not replace):
                 self.delete_from_table(table, col, data[col].apply(lambda x: str(x) if isinstance(x, ObjectId) else x))
                 data.to_sql(
                     name=table,
