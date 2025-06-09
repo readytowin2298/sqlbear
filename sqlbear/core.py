@@ -342,11 +342,12 @@ class SQLBear:
                     AND TABLE_NAME = '{table}'""", con=self.engine
         )
         problems = []
-        missing_cols = [col for col in data.colunms.unique() if col not in schema.COLUMN_NAME.unique()]
+        missing_cols = [col for col in data.columns.unique() if col not in schema.COLUMN_NAME.unique()]
+        data.drop(missing_cols, axis=1, inplace=True)
         for row in schema.to_dict(orient='records'):
             col = row['COLUMN_NAME']
             max_len = row['CHARACTER_MAXIMUM_LENGTH']
-            if pd.notnull(max_len):
+            if pd.notnull(max_len) and col in data.columns.unique():
                 max_actual_len = data[col].astype(str).str.len().max()
                 if max_actual_len > max_len:
                     problems.append({
@@ -355,7 +356,6 @@ class SQLBear:
                             'actual_max': max_actual_len
                         })
         # problems = problems
-        data.drop(missing_cols, axis=1, inplace=True)
         for problem in problems:
             data[problem['column']] = data[problem['column']].fillna('').apply(lambda x: x if len(x) <= problem['max_allowed'] else x[: int(problem['max_allowed'] - 3)] + '...')
         return data
