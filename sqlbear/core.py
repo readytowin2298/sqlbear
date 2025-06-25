@@ -357,7 +357,7 @@ class SQLBear:
                         })
         # problems = problems
         for problem in problems:
-            data[problem['column']] = data[problem['column']].fillna('').apply(lambda x: x if len(x) <= problem['max_allowed'] else x[: int(problem['max_allowed'] - 3)] + '...')
+            data[problem['column']] = data[problem['column']].fillna('').astype(str).apply(str).apply(lambda x: x if len(x) <= problem['max_allowed'] else x[: int(problem['max_allowed'] - 3)] + '...')
         return data
 
     def put_table(self, table: str, col: Union[str, Iterable], data: pd.DataFrame, index_cols: list=[], lock_tables_before_put: Union[bool, None]=None, replace: bool=False, force_schema_match: bool=False) -> None:
