@@ -119,23 +119,27 @@ class SQLBear:
             error_list = []
             str_cols = df.select_dtypes(include=[object, "string"]).columns.unique()
             for col in df.columns.unique():
-                if col in str_cols:
-                    max_length = df[col].dropna().astype(str).str.len().max() * (1 + buffer_ratio)
-                    # Suggest field type based on max string length
-                    if max_length is None or max_length == 0:
-                        suggested_types[col] = 'PLACEHOLDER'  # Default to TEXT if unknown
-                    elif max_length <= 1000:
-                        suggested_types[col] = VARCHAR(max_length)
+                try:
+                    if col in str_cols:
+                        max_length = df[col].dropna().astype(str).str.len().max() * (1 + buffer_ratio)
+                        # Suggest field type based on max string length
+                        if pd.isna(max_length) or max_length == 0:
+                            suggested_types[col] = 'PLACEHOLDER'  # Default to TEXT if unknown
+                        elif max_length <= 1000:
+                            suggested_types[col] = VARCHAR(max_length)
+                        else:
+                            suggested_types[col] = TEXT(max_length)
+                        # Scan for illegal characters if any are defined
+                        if illegal_chars:
+                            offending_rows = df[col].dropna().apply(lambda x: any(c in illegal_chars for c in str(x)))
+                            if offending_rows.any():
+                                indexes = df.index[offending_rows].tolist()
+                                error_list.append((col, indexes, "\n", df.loc[indexes, col], "\n"))
                     else:
-                        suggested_types[col] = TEXT(max_length)
-                    # Scan for illegal characters if any are defined
-                    if illegal_chars:
-                        offending_rows = df[col].dropna().apply(lambda x: any(c in illegal_chars for c in str(x)))
-                        if offending_rows.any():
-                            indexes = df.index[offending_rows].tolist()
-                            error_list.append((col, indexes, "\n", df.loc[indexes, col], "\n"))
-                else:
-                    suggested_types[col] = 'PLACEHOLDER'
+                        suggested_types[col] = 'PLACEHOLDER'
+                except:
+                    print(col)
+                    raise
             # Raise error if illegal characters are found
             if error_list:
                 raise ValueError(f"Illegal characters found in columns: {error_list}")
@@ -357,7 +361,7 @@ class SQLBear:
                         })
         # problems = problems
         for problem in problems:
-            data[problem['column']] = data[problem['column']].fillna('').astype(str).apply(str).apply(lambda x: x if len(x) <= problem['max_allowed'] else x[: int(problem['max_allowed'] - 3)] + '...')
+            data[problem['column']] = data[problem['column']].fillna('').apply(lambda x: x if len(x) <= problem['max_allowed'] else x[: int(problem['max_allowed'] - 3)] + '...')
         return data
 
     def put_table(self, table: str, col: Union[str, Iterable], data: pd.DataFrame, index_cols: list=[], lock_tables_before_put: Union[bool, None]=None, replace: bool=False, force_schema_match: bool=False) -> None:
