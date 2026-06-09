@@ -415,11 +415,11 @@ class SQLBear:
                 data[this_col] = pd.to_datetime(data[this_col]).apply(lambda x: x.tz_localize("UTC") if x is not None and x.tzinfo is None else x)
                 data[this_col] = data[this_col].dt.tz_convert(tz_support['server_timezone'])
                 data[this_col] = data[this_col].dt.tz_localize(None)
-        if lock_tables_before_put or self.lock_tables_before_put:
-            self.lock_table(table)
         try:
             # if table exists but no columns need to be changed and replacement isn't coerced
             if (columns_to_update != False and len(columns_to_update.keys()) == 0 and not replace):
+                if lock_tables_before_put or self.lock_tables_before_put:
+                    self.lock_table(table)
                 self.delete_from_table(table, col, data[col].apply(lambda x: str(x) if isinstance(x, ObjectId) else x))
                 data.to_sql(
                     name=table,
@@ -430,6 +430,8 @@ class SQLBear:
                 )
                 columns_to_index = self.normalize_columns_and_keys([col, *index_cols], required_types)
                 self.add_indexes(table, columns_to_index)
+                if lock_tables_before_put or self.lock_tables_before_put:
+                    self.unlock_tables()
             # If table exists already and some columns need to be changed or replacement is being coerced
             elif (columns_to_update != False and len(columns_to_update.keys()) > 0) or replace:
                 if not replace:
@@ -482,11 +484,9 @@ class SQLBear:
                 )
                 columns_to_index = self.normalize_columns_and_keys([col, *index_cols], required_types)
                 self.add_indexes(table, columns_to_index)
-            if lock_tables_before_put or self.lock_tables_before_put:
-                self.unlock_tables()
         except:
-            if lock_tables_before_put or self.lock_tables_before_put:
-                self.unlock_tables()
+            # if lock_tables_before_put or self.lock_tables_before_put:
+            #     self.unlock_tables()
             raise
     
     def read_sql_query(self, sql:str, *args, chunksize=None, **kwargs) -> pd.DataFrame:
