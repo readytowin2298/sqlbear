@@ -457,7 +457,7 @@ class SQLBear:
                                 {table} to {table}_old,
                                 {table}_tmp to {table}
                             """))
-                            connection.execute(text(f"""DROP TABLE {table}_tmp"""))
+                            connection.execute(text(f"""DROP TABLE {table}_old"""))
 
                 else:
                     required_types, _ = self.infer_sql_text_types(data, self.string_size_buffer)
