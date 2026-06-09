@@ -418,6 +418,7 @@ class SQLBear:
         if lock_tables_before_put or self.lock_tables_before_put:
             self.lock_table(table)
         try:
+            # if table exists but no columns need to be changed and replacement isn't coerced
             if (columns_to_update != False and len(columns_to_update.keys()) == 0 and not replace):
                 self.delete_from_table(table, col, data[col].apply(lambda x: str(x) if isinstance(x, ObjectId) else x))
                 data.to_sql(
@@ -429,6 +430,7 @@ class SQLBear:
                 )
                 columns_to_index = self.normalize_columns_and_keys([col, *index_cols], required_types)
                 self.add_indexes(table, columns_to_index)
+            # If table exists already and some columns need to be changed or replacement is being coerced
             elif (columns_to_update != False and len(columns_to_update.keys()) > 0) or replace:
                 if not replace:
                     # raise ValueError("We shouldn't be calling this now")
@@ -437,7 +439,7 @@ class SQLBear:
                     new_table = pd.concat([old_table, data], ignore_index=True).sort_index(axis=1)
                     required_types, _ = self.infer_sql_text_types(new_table, self.string_size_buffer)
                     new_table.to_sql(
-                        name=table,
+                        name=f"{table}_tmp",
                         index=False,
                         if_exists='replace',
                         con=self.engine,
@@ -446,6 +448,15 @@ class SQLBear:
                     )
                     columns_to_index = self.normalize_columns_and_keys([col, *index_cols], required_types)
                     self.add_indexes(table, columns_to_index)
+                    with self.engine.connect() as connection:
+                        with connection.begin() as transaction:
+                            connection.execute(text(f"""
+                            RENAME TABLE
+                                {table} to {table}_old,
+                                {table}_tmp to {table}
+                            """))
+                            connection.execute(text(f"""DROP TABLE {table}_tmp"""))
+
                 else:
                     required_types, _ = self.infer_sql_text_types(data, self.string_size_buffer)
                     data.to_sql(
@@ -458,6 +469,7 @@ class SQLBear:
                     )
                     columns_to_index = self.normalize_columns_and_keys([col, *index_cols], required_types)
                     self.add_indexes(table, columns_to_index)
+            # If table didn't exist yet
             else:
                 required_types, _ = self.infer_sql_text_types(data, self.string_size_buffer)
                 data.sort_index(axis=1).to_sql(
