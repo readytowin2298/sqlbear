@@ -125,10 +125,10 @@ class SQLBear:
                         # Suggest field type based on max string length
                         if pd.isna(max_length) or max_length == 0:
                             suggested_types[col] = 'PLACEHOLDER'  # Default to TEXT if unknown
-                        elif max_length <= 1000:
+                        elif max_length <= 255:
                             suggested_types[col] = VARCHAR(max_length)
                         else:
-                            suggested_types[col] = TEXT(max_length)
+                            suggested_types[col] = TEXT()
                         # Scan for illegal characters if any are defined
                         if illegal_chars:
                             offending_rows = df[col].dropna().apply(lambda x: any(c in illegal_chars for c in str(x)))
